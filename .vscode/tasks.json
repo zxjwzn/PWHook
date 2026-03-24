@@ -1,0 +1,17 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "自动打包并替换完美平台 app.asar",
+			"type": "shell",
+			"command": "asar",
+			"args": [
+				"pack",
+				"D:\\Codes\\JavaScript\\PWunpack",
+				"D:\\Applications\\PerfectWorld\\resources\\app.asar"
+			],
+			"isBackground": false,
+			"group": "build"
+		}
+	]
+}
