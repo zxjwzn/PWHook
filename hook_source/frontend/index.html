@@ -21,6 +21,14 @@
             <span id="status-badge" class="badge badge-connecting">连接中…</span>
         </div>
         <div class="toolbar-right">
+            <!-- 搜索框 -->
+            <div class="search-box">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="11" cy="11" r="8"></circle>
+                    <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+                </svg>
+                <input type="text" id="search-input" placeholder="搜索日志..." />
+            </div>
             <!-- 级别筛选 -->
             <div class="filter-group">
                 <button class="filter-btn active" data-level="all">ALL</button>
@@ -36,6 +44,14 @@
                 <span class="toggle-track"><span class="toggle-thumb"></span></span>
                 <span>自动滚动</span>
             </label>
+            <button id="export-btn" class="action-btn action-btn-export" title="导出日志文件">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                    <polyline points="7 10 12 15 17 10"></polyline>
+                    <line x1="12" y1="15" x2="12" y2="3"></line>
+                </svg>
+                导出
+            </button>
             <button id="clear-btn" class="action-btn" title="清空日志">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <polyline points="3 6 5 6 21 6"></polyline>

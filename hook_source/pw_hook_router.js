@@ -1,5 +1,7 @@
 const store = require("./pw_hook_store.js");
-const { promisifyCall } = require("./pw_hook_promisify.js");
+
+// 全局响应等待队列，用于解决相同 waitFor 通道并发导致的串话问题 (FIFO消费)
+const waitQueues = {};
 
 // 路由参数映射表：将外部友好的 API 转换为内部的 IPC Channel 和数组参数
 const ROUTE_MAPPING = {
@@ -27,7 +29,7 @@ const ROUTE_MAPPING = {
                     game_types: body.game_types || "10,12,14,16,27,20,33,40,41,44,51",
                     start_time: body.start_time || "",
                     end_time: body.end_time || "",
-                    season: body.season || "S23",
+                    season: body.season || "",
                     ticket_id: body.ticket_id || "",
                 },
             ];
@@ -36,18 +38,74 @@ const ROUTE_MAPPING = {
     get_season_desc: {
         channel: "GET_SEASON_DESC_REQ",
         buildArgs: (body) => {
-            // 给它一个空的字典 {} 作为第一个参数（业务参数 t），避免 undefined 异常
+            // 避免 undefined 异常
             return [{}];
         },
     },
-};
-
-// Hook 元数据：声明哪些函数需要回调→Promise 转换
-// 这与 hooks.json 中的配置保持一致
-const HOOK_META = {
-    searchFriend: { callbackStyle: "node", successIndex: 1, errorIndex: 2 },
-    // 新增 hook 时在此添加元数据：
-    // encrypt: { callbackStyle: 'none' },
+    get_match_calendar: {
+        channel: "CSGO_OVERVIEW_GET_DAILY_STATS_REQ",
+        buildArgs: (body) => {
+            return [
+                {
+                    uid: String(body.uid),
+                    start_time: body.start_time || "",
+                    end_time: body.end_time || "",
+                },
+            ];
+        },
+    },
+    create_ladder_room: {
+        channel: "CSGO_LADDER_MT_CREATE_TEAM_REQ",
+        buildArgs: (body) => {
+            return [
+                {
+                    map_names: body.map_names || ["de_dust2"],
+                    zone_ids: body.zone_ids || [603],
+                    bp_modes: body.bp_modes || [0],
+                    game_target: body.game_target || 0,
+                    specialities: body.specialities || [],
+                    role_card_id: body.role_card_id || 0,
+                },
+            ];
+        },
+        waitFor: "CSGO_LADDER_MT_CREATE_TEAM_RES",
+    },
+    leave_ladder_room: {
+        channel: "CSGO_LADDER_MT_LEAVE_TEAM_REQ",
+        buildArgs: (body) => {
+            return [
+                {
+                    leave_team_reason: body.leave_team_reason || 0,
+                },
+            ];
+        },
+        waitFor: "CSGO_LADDER_MT_LEAVE_TEAM_NOTIFY",
+    },
+    get_match_zone: {
+        channel: "CSGO_EMIT_GET_NETWORK_SPEED",
+        buildArgs: (body) => {
+            const envelope = {
+                $$key$$: body.key || Math.random(),
+                $$data$$: body.data || {},
+                $$name$$: body.name || "hs",
+            };
+            return [envelope];
+        },
+    },
+    get_comment_list: {
+        channel: "CSGO_OVERVIEW_COMMENT_GET_COMMENT_LIST_REQ",
+        buildArgs: (body) => {
+            const data = body.data || {
+                target: body.target || body.uid || "",
+            };
+            const envelope = {
+                $$key$$: body.key || Math.random(),
+                $$data$$: data,
+                $$name$$: body.name || "hs",
+            };
+            return [envelope];
+        },
+    },
 };
 
 // 路由分发中心：处理 HTTP 请求并将参数透传给挂载的系统内部函数
@@ -87,11 +145,16 @@ const handleRequest = async (req, res, bodyPayload) => {
             parsedBody = JSON.parse(bodyPayload);
         }
 
+        let nowait = false;
+        let waitFor = null;
+
         // 检查是否有对应的路由映射
         if (ROUTE_MAPPING[reqRouteMatch]) {
             const mappedRoute = ROUTE_MAPPING[reqRouteMatch];
             targetFuncName = mappedRoute.channel;
             args = mappedRoute.buildArgs(parsedBody);
+            nowait = !!mappedRoute.nowait;
+            waitFor = mappedRoute.waitFor;
         } else {
             // 未匹配映射时，兼容原始方式，直接读取 json 中的 args 数组
             args = parsedBody.args || [];
@@ -108,14 +171,47 @@ const handleRequest = async (req, res, bodyPayload) => {
             };
         }
 
-        const meta = HOOK_META[targetFuncName];
-
         let result;
-        if (meta && meta.callbackStyle === "node") {
-            // 回调式函数：使用 promisify 包装
-            result = await promisifyCall(targetFunc, null, args, meta.successIndex, meta.errorIndex);
+        if (waitFor) {
+            // 需要等待特定服务端的推送事件再返回结果
+            const bus = store.getEventBus();
+
+            const waitPromise = new Promise((resolve) => {
+                // 如果是第一次遇到这个通道，初始化队列并注册全局监听
+                if (!waitQueues[waitFor]) {
+                    waitQueues[waitFor] = [];
+                    bus.on(waitFor, (resData) => {
+                        if (waitQueues[waitFor].length > 0) {
+                            // 取出最旧的等待者并触发
+                            const oldest = waitQueues[waitFor].shift();
+                            clearTimeout(oldest.timeoutId);
+                            oldest.resolve(resData);
+                        }
+                    });
+                }
+
+                // 超时处理：如果2秒内没回来，把自己剔除出队列，防止内存泄漏和死锁
+                const timeoutId = setTimeout(() => {
+                    const idx = waitQueues[waitFor].findIndex((item) => item.resolve === resolve);
+                    if (idx !== -1) {
+                        waitQueues[waitFor].splice(idx, 1);
+                        resolve({ error: `等待事件 ${waitFor} 超时（2秒）` });
+                    }
+                }, 2000);
+
+                // 把自己加入排队
+                waitQueues[waitFor].push({ resolve, timeoutId });
+            });
+
+            // 触发原函数 (通常这类带 waitFor 的函数本质上在平台里都是 fire-and-forget 的，不会给你抛返回值)
+            targetFunc(...args);
+
+            // 阻塞当前请求挂起，直到后端推送响应我们捕获到，或 2 秒超时
+            result = await waitPromise;
+        } else if (nowait) {
+            targetFunc(...args);
+            result = { fired: true };
         } else {
-            // 普通函数或 Promise 函数：直接调用
             result = await targetFunc(...args);
         }
 

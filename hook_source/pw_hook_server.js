@@ -1,7 +1,7 @@
 const http = require("http");
 const router = require("./pw_hook_router.js");
 
-const PORT = 28888; // HTTP服务器监听的端口，Python端将请求这个端口
+const PORT = 28888; // HTTP服务器监听的端口
 
 // SSE 客户端列表
 const sseClients = [];
@@ -76,11 +76,21 @@ const startServer = () => {
         }
 
         let body = "";
+        let bodySize = 0;
+        const MAX_BODY_SIZE = 2 * 1024 * 1024; // 2MB
+
         req.on("data", (chunk) => {
+            bodySize += chunk.length;
+            if (bodySize > MAX_BODY_SIZE) {
+                console.warn(`[PW_HOOK] 拦截极大恶意 Payload (${bodySize} bytes), 强行截断连接`);
+                req.destroy();
+                return;
+            }
             body += chunk.toString();
         });
 
         req.on("end", async () => {
+            if (req.destroyed) return;
             // 将收集到的纯文本交由 router 处理
             const response = await router.handleRequest(req, res, body);
 

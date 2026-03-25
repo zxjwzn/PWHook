@@ -8,12 +8,17 @@
     const statusBadge = document.getElementById("status-badge");
     const autoScrollChk = document.getElementById("auto-scroll");
     const clearBtn   = document.getElementById("clear-btn");
+    const exportBtn  = document.getElementById("export-btn");
     const filterBtns = document.querySelectorAll(".filter-btn");
+    const searchInput = document.getElementById("search-input");
 
     let totalCount = 0;
     let currentFilter = "all";
+    let currentSearch = "";
     let es = null;
     let reconnectTimer = null;
+    let reconnectDelay = 2000;
+    const logBuffer = [];  // 存储格式化后的日志文本，供导出使用
 
     // ── 更新状态徽章 ──────────────────────────────────────────
     const setStatus = (state) => {
@@ -47,7 +52,9 @@
 
         const row = document.createElement("div");
         row.className = `log-row level-${level}`;
-        if (currentFilter !== "all" && currentFilter !== level) {
+        const levelMatch = currentFilter === "all" || level === currentFilter;
+        const textMatch = currentSearch === "" || message.toLowerCase().includes(currentSearch);
+        if (!(levelMatch && textMatch)) {
             row.classList.add("hidden");
         }
         row.dataset.level = level;
@@ -71,6 +78,12 @@
 
         totalCount++;
         countInfo.textContent = `${totalCount} 条日志`;
+
+        // 同步写入导出缓冲，避免无限增长导致页面 OOM
+        logBuffer.push(`[${formatTime(time)}] [${(LEVEL_LABELS[level] || level.toUpperCase()).padEnd(5)}] ${message}`);
+        if (logBuffer.length > MAX_ROWS) {
+            logBuffer.shift();
+        }
 
         if (autoScrollChk.checked) {
             row.scrollIntoView({ block: "end", behavior: "auto" });
@@ -109,6 +122,7 @@
         es.onopen = () => {
             setStatus("ok");
             clearTimeout(reconnectTimer);
+            reconnectDelay = 2000; // 连接成功重置退避
             removeEmptyState();
             showEmptyState();
         };
@@ -124,10 +138,29 @@
         es.onerror = () => {
             setStatus("error");
             es.close();
-            // 2 秒后自动重连
-            reconnectTimer = setTimeout(connect, 2000);
+            // 指数退避重连，最大 16 秒
+            reconnectTimer = setTimeout(() => {
+                reconnectDelay = Math.min(reconnectDelay * 2, 16000);
+                connect();
+            }, reconnectDelay);
         };
     };
+
+    // ── 过滤器与搜索 ──────────────────────────────────────────
+    const applyFilters = () => {
+        document.querySelectorAll(".log-row").forEach((row) => {
+            const levelMatch = currentFilter === "all" || row.dataset.level === currentFilter;
+            const textMatch = currentSearch === "" || row.textContent.toLowerCase().includes(currentSearch);
+            row.classList.toggle("hidden", !(levelMatch && textMatch));
+        });
+    };
+
+    if (searchInput) {
+        searchInput.addEventListener("input", (e) => {
+            currentSearch = e.target.value.toLowerCase();
+            applyFilters();
+        });
+    }
 
     // ── 过滤器 ────────────────────────────────────────────────
     filterBtns.forEach((btn) => {
@@ -135,11 +168,7 @@
             filterBtns.forEach((b) => b.classList.remove("active"));
             btn.classList.add("active");
             currentFilter = btn.dataset.level;
-
-            document.querySelectorAll(".log-row").forEach((row) => {
-                const matches = currentFilter === "all" || row.dataset.level === currentFilter;
-                row.classList.toggle("hidden", !matches);
-            });
+            applyFilters();
         });
     });
 
@@ -147,8 +176,30 @@
     clearBtn.addEventListener("click", () => {
         logList.innerHTML = "";
         totalCount = 0;
+        logBuffer.length = 0;
         countInfo.textContent = "0 条日志";
         showEmptyState();
+    });
+
+    // ── 导出 ──────────────────────────────────────────────────
+    exportBtn.addEventListener("click", () => {
+        if (logBuffer.length === 0) return;
+
+        const text = logBuffer.join("\n");
+        const blob = new Blob([text], { type: "text/plain;charset=utf-8" });
+        const url  = URL.createObjectURL(blob);
+
+        const now = new Date();
+        const pad = (n) => String(n).padStart(2, "0");
+        const filename = `pwhook_${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}.log`;
+
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = filename;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
     });
 
     // ── 启动 ──────────────────────────────────────────────────
