@@ -7,8 +7,20 @@
 			"command": "asar",
 			"args": [
 				"pack",
-				"D:\\Codes\\JavaScript\\PWunpack",
+				"D:\\Codes\\JavaScript\\PerfectWorld\\app",
 				"D:\\Applications\\PerfectWorld\\resources\\app.asar"
+			],
+			"isBackground": false,
+			"group": "build"
+		},
+		{
+			"label": "自动解包app.asar",
+			"type": "shell",
+			"command": "asar",
+			"args": [
+				"extract",
+				"D:\\Codes\\JavaScript\\PerfectWorld\\app.asar",
+				"D:\\Codes\\JavaScript\\PerfectWorld\\app"
 			],
 			"isBackground": false,
 			"group": "build"
