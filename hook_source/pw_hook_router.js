@@ -106,6 +106,53 @@ const ROUTE_MAPPING = {
             return [envelope];
         },
     },
+    send_team_chat: {
+        channel: "CSGO_LADDER_MT_TEAM_CHAT_REQ",
+        buildArgs: (body) => {
+            return [
+                {
+                    chat_text: String(body.chat_text || ""),
+                    chat_type: Number(body.chat_type || 1),
+                },
+            ];
+        },
+        waitFor: "CSGO_LADDER_MT_TEAM_CHAT_RES",
+    },
+    begin_ladder_match: {
+        channel: "CSGO_LADDER_MT_MATCH_REQ",
+        buildArgs: (body) => {
+            return [
+                {
+                    leave_team_reason: body.leave_team_reason || 0,
+                },
+            ];
+        },
+        waitFor: "CSGO_LADDER_MT_MATCH_RES",
+    },
+    get_friend_list: {
+        channel: "COMMON_IM_MT_GET_FRIEND_LIST_REQ",
+        buildArgs: (body) => {
+            return [
+                {
+                    friendType: body.friendType || 1,
+                },
+            ];
+        },
+        waitFor: "COMMON_IM_MT_GET_FRIEND_LIST_RES",
+    },
+    send_friend_msg:{
+        channel: "COMMON_IM_MT_CHAT_REQ",
+        buildArgs: (body) => {
+            return [
+                {
+                    chatChannel: body.chatChannel || 1,
+                    targetId: String(body.targetId || ""),
+                    text: String(body.text || ""),
+                },
+            ];
+        },
+        waitFor: "COMMON_IM_MT_CHAT_RES",
+    }
 };
 
 // 路由分发中心：处理 HTTP 请求并将参数透传给挂载的系统内部函数
