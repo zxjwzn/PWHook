@@ -5,7 +5,7 @@ const path = require("path");
 
 const init = () => {
     // ─────────────────────────────────────────────────────────────
-    // 0. 在任何应用代码将 console 替换为空函数之前，先抢救原生 console
+    // 劫持原生 console
     // ─────────────────────────────────────────────────────────────
     const nativeConsole = {
         log: Function.prototype.bind.call(console.log, console),
@@ -16,7 +16,7 @@ const init = () => {
     };
     global.__pw_console__ = nativeConsole;
 
-    // 劫持 console：将输出同时发往 SSE 广播队列（前端）和原生控制台
+    // 将输出同时发往 SSE 和原生控制台
     const levels = ["log", "info", "warn", "error", "debug"];
     levels.forEach((level) => {
         const hooked = (...args) => {
@@ -25,26 +25,25 @@ const init = () => {
         };
         try {
             Object.defineProperty(console, level, {
-                get: () => hooked,     // 始终返回我们的劫持函数
-                set: () => { },         // 静默吞掉赋值，不抛错
-                configurable: false,   // 禁止再次 defineProperty
+                get: () => hooked,
+                set: () => { },
+                configurable: false,
                 enumerable: true,
             });
         } catch (_) {
-            // 万全后备：定义失败时直接赋值
             console[level] = hooked;
         }
     });
 
     // ─────────────────────────────────────────────────────────────
-    // 1. 启动基于 HTTP 的 RPC 通信服务器（含 SSE 日志端点）
+    // 启动基于 HTTP 的 RPC 通信服务器（含 SSE 日志端点）
     // ─────────────────────────────────────────────────────────────
     server.startServer();
 
     console.log("[PW_HOOK] 正在初始化 God Mode Hook 系统...");
 
     // ─────────────────────────────────────────────────────────────
-    // 2. 打开前端控制台窗口
+    // 打开前端控制台窗口
     // ─────────────────────────────────────────────────────────────
     const openConsoleWindow = () => {
         const win = new electron.BrowserWindow({
@@ -56,14 +55,11 @@ const init = () => {
                 nodeIntegration: false,
                 contextIsolation: true,
             },
-            // 不显示在任务栏菜单（可按需注释掉）
-            // skipTaskbar: true,
         });
 
         const frontendPath = path.join(__dirname, "frontend", "index.html");
         win.loadFile(frontendPath);
 
-        // 移除默认菜单栏
         win.setMenuBarVisibility(false);
     };
 
@@ -74,10 +70,8 @@ const init = () => {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // 2.5 补救：获取注入前已经被程序挂载的原生事件处理函数
+    // 获取注入前已经被程序挂载的原生事件处理函数
     // ─────────────────────────────────────────────────────────────
-    // 如果我们的注入时机较晚，平台已经先执行了 ipcMain.on 或 ipcMain.handle，
-    // 这里将其回溯注册进我们的 store
     const existingOnChannels = electron.ipcMain.eventNames();
     existingOnChannels.forEach((channel) => {
         if (typeof channel !== "string") return;
@@ -111,7 +105,7 @@ const init = () => {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // 3. 劫持 Electron 的 IPC 通信 (主进程)
+    // 劫持 Electron 主进程的 IPC 通信
     // ─────────────────────────────────────────────────────────────
     const originalIpcHandle = electron.ipcMain.handle;
     electron.ipcMain.handle = function (channel, listener) {
@@ -163,7 +157,7 @@ const init = () => {
         });
 
         const wrappedListener = function (event, ...args) {
-            // 当玩家在完美平台真实界面点击按钮触发 IPC 通信时，拦截并打印它的上行报文
+            // 当玩家在平台界面点击按钮触发 IPC 通信时，拦截并打印它的上行报文
             console.log(`[PW_HOOK] 捕获前端请求 ↑ [${channel}]`);
             if (args.length > 0) {
                 console.log(`[PW_HOOK] 请求传参 Payload:`, JSON.stringify(args[0], null, 2));
@@ -176,12 +170,10 @@ const init = () => {
     };
 
     // ─────────────────────────────────────────────────────────────
-    // 4. 拦截服务端 WebSocket 向前端推送 (webContents.send)
-    // 根据 handle_response 分析，解密反序列化后的所有 Res/Notify 
-    // 都会通过 webContents.send(channel, data) 分发给渲染进程。
+    // 拦截WebSocket推送
     // ─────────────────────────────────────────────────────────────
     const hookWebContents = (wc) => {
-        if (wc.__pw_hook_injected__) return; // 避免重复注入
+        if (wc.__pw_hook_injected__) return;
         wc.__pw_hook_injected__ = true;
 
         const originalSend = wc.send;
@@ -201,12 +193,12 @@ const init = () => {
         };
     };
 
-    // 1. 监听未来创建的 webContents
+    // 监听webContents
     electron.app.on("web-contents-created", (event, wc) => {
         hookWebContents(wc);
     });
 
-    // 2. 兜底：处理在 Hook 代码执行前就已经创建好的早期 webContents (比如主界面)
+    // 处理已经创建好的webContents
     if (electron.webContents && typeof electron.webContents.getAllWebContents === "function") {
         electron.webContents.getAllWebContents().forEach(wc => hookWebContents(wc));
     }

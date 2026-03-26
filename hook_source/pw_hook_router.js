@@ -1,14 +1,13 @@
 const store = require("./pw_hook_store.js");
 
-// 全局响应等待队列，用于解决相同 waitFor 通道并发导致的串话问题 (FIFO消费)
+// 全局响应等待队列
 const waitQueues = {};
 
-// 路由参数映射表：将外部友好的 API 转换为内部的 IPC Channel 和数组参数
+// 将外部友好的 API 转换为内部的 IPC Channel 和数组参数
 const ROUTE_MAPPING = {
     search_friend: {
         channel: "COMMON_IM_MT_SEARCH_FRIEND_REQ",
         buildArgs: (body) => {
-            // 解析 { "name": "name", "page": 1 } 变成 ["name", 1]
             const keyword = body.name || "";
             const page = body.page || 1;
             return [keyword, page];
@@ -17,10 +16,6 @@ const ROUTE_MAPPING = {
     get_match_list: {
         channel: "CSGO_OVERVIEW_GET_MATCH_LIST_REQ",
         buildArgs: (body) => {
-            // 根据抓包参数构建内部调用的载荷
-            // 注: 平台代码自带逻辑: let s = { access_token: y, ...e };
-            // 所以我们并不需要在请求中补全 access_token，底层会自动补全。
-            // 只需要传抓包里的其他业务字段。
             return [
                 {
                     uid: String(body.uid),
@@ -38,7 +33,6 @@ const ROUTE_MAPPING = {
     get_season_desc: {
         channel: "GET_SEASON_DESC_REQ",
         buildArgs: (body) => {
-            // 避免 undefined 异常
             return [{}];
         },
     },
@@ -155,7 +149,7 @@ const ROUTE_MAPPING = {
     }
 };
 
-// 路由分发中心：处理 HTTP 请求并将参数透传给挂载的系统内部函数
+// 处理 HTTP 请求并将参数透传给挂载的系统内部函数
 const handleRequest = async (req, res, bodyPayload) => {
     // 约定 API 统一路径前缀: /api/call/函数名
     const urlPath = req.url.split("?")[0];
@@ -183,7 +177,7 @@ const handleRequest = async (req, res, bodyPayload) => {
     }
 
     const reqRouteMatch = urlPath.replace(routePrefix, "");
-    let targetFuncName = reqRouteMatch; // 默认为外部传进来的原样字符串
+    let targetFuncName = reqRouteMatch;
     let args = [];
 
     try {
@@ -224,7 +218,7 @@ const handleRequest = async (req, res, bodyPayload) => {
             const bus = store.getEventBus();
 
             const waitPromise = new Promise((resolve) => {
-                // 如果是第一次遇到这个通道，初始化队列并注册全局监听
+                // 初始化队列并注册全局监听
                 if (!waitQueues[waitFor]) {
                     waitQueues[waitFor] = [];
                     bus.on(waitFor, (resData) => {
@@ -237,7 +231,7 @@ const handleRequest = async (req, res, bodyPayload) => {
                     });
                 }
 
-                // 超时处理：如果2秒内没回来，把自己剔除出队列，防止内存泄漏和死锁
+                // 超时处理
                 const timeoutId = setTimeout(() => {
                     const idx = waitQueues[waitFor].findIndex((item) => item.resolve === resolve);
                     if (idx !== -1) {
@@ -250,10 +244,10 @@ const handleRequest = async (req, res, bodyPayload) => {
                 waitQueues[waitFor].push({ resolve, timeoutId });
             });
 
-            // 触发原函数 (通常这类带 waitFor 的函数本质上在平台里都是 fire-and-forget 的，不会给你抛返回值)
+            // 触发原函数
             targetFunc(...args);
 
-            // 阻塞当前请求挂起，直到后端推送响应我们捕获到，或 2 秒超时
+            // 阻塞当前请求挂起直到推送响应或超时
             result = await waitPromise;
         } else if (nowait) {
             targetFunc(...args);

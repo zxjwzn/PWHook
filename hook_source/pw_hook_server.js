@@ -103,7 +103,7 @@ const startServer = () => {
     });
 
     server.listen(PORT, "127.0.0.1", () => {
-        console.log(`[PW_HOOK] 本地后门服务器已启动: http://127.0.0.1:${PORT}`);
+        console.log(`[PW_HOOK] 服务器已启动: http://127.0.0.1:${PORT}`);
     });
 };
 

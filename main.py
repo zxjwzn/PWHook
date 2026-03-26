@@ -118,7 +118,7 @@ async def inject():
             
             if val == "HOOK_SUCCESS":
                 print("\n==================================")
-                print("[+] PWHook 后台代理服已挂载到内存中。")
+                print("[+] PWHook 已挂载到内存中。")
                 print("==================================\n")
             else:
                 print(f"[-] 在远程主进程执行发生异常: {val}")
