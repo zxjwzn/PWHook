@@ -1,5 +1,6 @@
 const server = require("./pw_hook_server.js");
 const store = require("./pw_hook_store.js");
+const interceptor = require("./pw_hook_interceptor.js");
 const electron = require("electron");
 const path = require("path");
 
@@ -117,13 +118,25 @@ const init = () => {
         });
 
         const wrappedListener = async function (event, ...args) {
-            if (channel.startsWith("CSGO_") || channel.startsWith("CS2_") || channel.startsWith("MT_") || channel.startsWith("COMMON_")) {
-                console.log(`[PW_HOOK] 捕获前端请求 ↑ [${channel}]`);
-                if (args.length > 0) {
-                    console.log(`[PW_HOOK] 请求传参 Payload:`, JSON.stringify(args[0], null, 2));
+            let modifiedArgs = args;
+
+            // 拦截器修改请求参数
+            if (interceptor.upstream[channel]) {
+                try {
+                    modifiedArgs = interceptor.upstream[channel](channel, event, args);
+                    console.log(`[PW_HOOK] 请求被拦截并修改 [${channel}]`);
+                } catch (e) {
+                    console.error(`[PW_HOOK] 上行拦截器执行失败:`, e);
                 }
             }
-            return await listener.apply(this, arguments);
+
+            if (channel.startsWith("CSGO_") || channel.startsWith("CS2_") || channel.startsWith("MT_") || channel.startsWith("COMMON_")) {
+                console.log(`[PW_HOOK] 捕获前端请求 ↑ [${channel}]`);
+                if (modifiedArgs.length > 0) {
+                    console.log(`[PW_HOOK] 请求传参 Payload:`, JSON.stringify(modifiedArgs[0], null, 2));
+                }
+            }
+            return await listener.apply(this, [event, ...modifiedArgs]);
         };
 
         const newArgs = [channel, wrappedListener];
@@ -157,12 +170,24 @@ const init = () => {
         });
 
         const wrappedListener = function (event, ...args) {
+            let modifiedArgs = args;
+
+            // 拦截器修改请求参数
+            if (interceptor.upstream[channel]) {
+                try {
+                    modifiedArgs = interceptor.upstream[channel](channel, event, args);
+                    console.log(`[PW_HOOK] 请求被拦截并修改 [${channel}]`);
+                } catch (e) {
+                    console.error(`[PW_HOOK] 上行拦截器执行失败:`, e);
+                }
+            }
+
             // 当玩家在平台界面点击按钮触发 IPC 通信时，拦截并打印它的上行报文
             console.log(`[PW_HOOK] 捕获前端请求 ↑ [${channel}]`);
-            if (args.length > 0) {
-                console.log(`[PW_HOOK] 请求传参 Payload:`, JSON.stringify(args[0], null, 2));
+            if (modifiedArgs.length > 0) {
+                console.log(`[PW_HOOK] 请求传参 Payload:`, JSON.stringify(modifiedArgs[0], null, 2));
             }
-            return listener.apply(this, arguments);
+            return listener.apply(this, [event, ...modifiedArgs]);
         };
 
         const newArgs = [channel, wrappedListener];
@@ -178,18 +203,43 @@ const init = () => {
 
         const originalSend = wc.send;
         wc.send = function (channel, ...args) {
-            console.log(`[PW_HOOK] 捕获服务端推送 ↓ [${channel}]`);
-            if (args.length > 0) {
-                console.log(`[PW_HOOK] 推送数据 Payload:`, JSON.stringify(args[0], null, 2));
+            let targetChannel = channel;
+            let modifiedArgs = args;
+
+            // 拦截器修改响应参数
+            if (interceptor.downstream[channel]) {
+                try {
+                    const downstreamResult = interceptor.downstream[channel](channel, args);
+
+                    if (Array.isArray(downstreamResult)) {
+                        modifiedArgs = downstreamResult;
+                    } else if (downstreamResult && typeof downstreamResult === "object") {
+                        if (typeof downstreamResult.channel === "string" && downstreamResult.channel.length > 0) {
+                            targetChannel = downstreamResult.channel;
+                        }
+                        if (Array.isArray(downstreamResult.args)) {
+                            modifiedArgs = downstreamResult.args;
+                        }
+                    }
+                    console.log(`[PW_HOOK] 响应被拦截并修改 [${channel}]`);
+                } catch (e) {
+                    console.error(`[PW_HOOK] 下行拦截器执行失败:`, e);
+                }
+            }
+
+            console.log(`[PW_HOOK] 捕获服务端推送 ↓ [${targetChannel}]`);
+            if (modifiedArgs.length > 0) {
+                console.log(`[PW_HOOK] 推送数据 Payload:`, JSON.stringify(modifiedArgs[0], null, 2));
             }
 
             // 将服务端推给前端的事件通过 EventBus 广播出来，供 Router 等机制挂起等待
             try {
                 const store = require("./pw_hook_store.js");
-                store.getEventBus().emit(channel, args[0]);
+                store.getEventBus().emit(targetChannel, modifiedArgs[0]);
+                server.broadcastEvent(targetChannel, modifiedArgs[0]); // 推送到外部长连接
             } catch (err) { }
 
-            return originalSend.apply(this, [channel, ...args]);
+            return originalSend.apply(this, [targetChannel, ...modifiedArgs]);
         };
     };
 
