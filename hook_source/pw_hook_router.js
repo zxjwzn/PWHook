@@ -278,6 +278,38 @@ const ROUTE_MAPPING = {
         },
         waitFor: "COMMON_IM_MT_CHAT_RES",
     },
+    save_reaction_result: {
+        description: "保存反应测试结果",
+        channel: "REACTION_TESTSAVE_USER_RESULT_REQ",
+        params: {
+            avgReactMs: {
+                desc: "平均反应时间(毫秒)",
+                default: 160,
+            },
+            bstReactMs: {
+                desc: "最佳反应时间(毫秒)",
+                default: 140,
+            },
+            hitCnt: {
+                desc: "命中次数(<=165ms为命中)",
+                default: 4,
+            },
+            lv: {
+                desc: "测试难度等级(如1, 4等)",
+                default: 4,
+            }
+        },
+        buildArgs: (params) => {
+            return [
+                {
+                    avgReactMs: Number(params.avgReactMs),
+                    bstReactMs: Number(params.bstReactMs),
+                    hitCnt: Number(params.hitCnt),
+                    lv: Number(params.lv),
+                },
+            ];
+        },
+    },
 };
 
 // 处理 HTTP 请求并将参数透传给挂载的系统内部函数
