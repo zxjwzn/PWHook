@@ -26,6 +26,17 @@ const ROUTE_MAPPING = {
                 },
             ];
         },
+        parseResponse: (res) => {
+            // 解析字符串类型的 JSON 返回值
+            if (typeof res === "string") {
+                try {
+                    return JSON.parse(res);
+                } catch (e) {
+                    return res;
+                }
+            }
+            return res;
+        }
     },
     get_match_list: {
         description: "获取比赛列表",
@@ -82,7 +93,7 @@ const ROUTE_MAPPING = {
     get_current_season: {
         description: "获取当前赛季",
         params: {},
-        channel: "GET_SEASON_DESC_REQ",
+        channel: "COMMON_GET_SEASON_DESC_REQ",
         buildArgs: () => {
             return [{}];
         },
@@ -169,7 +180,7 @@ const ROUTE_MAPPING = {
         buildArgs: (params) => {
             return [
                 {
-                    leave_team_reason: params.leave_team_reason,
+                    leave_team_reason: Number(params.leave_team_reason),
                 },
             ];
         },
@@ -212,12 +223,12 @@ const ROUTE_MAPPING = {
     send_team_chat: {
         description: "发送队伍聊天",
         params: {
-            chat_text: {
+            text: {
                 desc: "消息内容",
                 default: "",
             },
-            chat_type: {
-                desc: "类型,1为普通消息,2为系统消息,3呼出新手引导界面,4发送上一对局赛后总结,5发送表情包",
+            type: {
+                desc: "类型,1为普通消息,2为系统消息,3呼出新手引导界面,4发送上一对局赛后总结,5发送表情包。3和4内容与chat_text无关",
                 default: 1,
             },
         },
@@ -270,7 +281,7 @@ const ROUTE_MAPPING = {
         buildArgs: (params) => {
             return [
                 {
-                    chatChannel: params.chatChannel,
+                    chatChannel: Number(params.chatChannel),
                     targetId: params.uid,
                     text: params.text,
                 },
@@ -309,6 +320,68 @@ const ROUTE_MAPPING = {
                 },
             ];
         },
+    },
+    get_season_stats: {
+        description: "获取赛季统计数据(雷达图/武器/地图)",
+        channel: "CSGO_OVERVIEW_GET_SEASON_STATS_REQ",
+        params: {
+            uid: {
+                desc: "用户steamID",
+                default: "",
+            },
+            season: {
+                desc: "要查询的赛季ID",
+                default: "",
+            },
+            current_season: {
+                desc: "当前赛季ID",
+                default: "",
+            },
+        },
+        buildArgs: (params) => {
+            const envelope = {
+                $$key$$: Math.random(),
+                $$data$$: {
+                    uid: params.uid,
+                    season: params.season,
+                    stats_list: "ladder,map,weapon",
+                    need_max_score: 1,
+                    current_season: params.current_season,
+                },
+                $$name$$: "hs",
+            };
+            return [envelope];
+        },
+    },
+    get_match_detail: {
+        description: "获取赛后战绩详情",
+        channel: "CSGO_GET_REPORT_DETAIL_REQ",
+        params: {
+            match_id: {
+                desc: "比赛对局ID",
+                default: "",
+            },
+        },
+        buildArgs: (params) => {
+            const envelope = {
+                $$key$$: Math.random(),
+                $$data$$: {
+                    match_id: params.match_id,
+                },
+                $$name$$: "hs",
+            };
+            return [envelope];
+        },
+        parseResponse: (res) => {
+            if (typeof res === "string") {
+                try {
+                    return JSON.parse(res);
+                } catch (e) {
+                    return res;
+                }
+            }
+            return res;
+        }
     },
 };
 
@@ -459,7 +532,18 @@ const handleRequest = async (req, res, bodyPayload) => {
             result = await targetFunc(...args);
         }
 
-        return { status: 200, data: { success: true, result: result } };
+        // 直接提取深层挂载的数据，如 $$data$$，并作为最外层结果直接返回
+        let finalPayload = result;
+        if (finalPayload && typeof finalPayload === "object" && "$$data$$" in finalPayload) {
+            finalPayload = finalPayload.$$data$$;
+        }
+
+        // 允许路由自定义响应解析规则 (parseResponse)
+        if (ROUTE_MAPPING[reqRouteMatch] && typeof ROUTE_MAPPING[reqRouteMatch].parseResponse === "function") {
+            finalPayload = ROUTE_MAPPING[reqRouteMatch].parseResponse(finalPayload);
+        }
+
+        return { status: 200, data: finalPayload };
     } catch (err) {
         console.error(`[PW_HOOK] 调用通道 ${targetFuncName} 出现异常:`, err);
         return { status: 500, data: { error: err.message || err.toString() } };
