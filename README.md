@@ -283,6 +283,23 @@
 
 ## 业务路由清单
 
+### `POST /api/call/check_login_from_steam`
+- 通道：`check-loginFromSteam`
+- 说明：伪造触发 check-loginFromSteam 登录/登出事件
+
+请求体：
+
+```json
+{
+  "type": "logined",
+  "token": "",
+  "uid": "",
+  "login_method": 0
+}
+```
+
+---
+
 ### `POST /api/call/search_friend`
 - 通道：`COMMON_IM_MT_SEARCH_FRIEND_REQ`
 - 说明：搜索好友
@@ -296,6 +313,21 @@
 }
 ```
 
+---
+
+### `POST /api/call/add_friend`
+- 通道：`COMMON_IM_MT_APPLY_FRIEND_REQ`
+- 说明：添加好友
+- 返回模式：等待 `COMMON_IM_MT_APPLY_FRIEND_RES`
+
+请求体：
+
+```json
+{
+  "uid": ""
+}
+```
+注:errCode为0添加成功,为10则重复添加
 ---
 
 ### `POST /api/call/get_match_list`
