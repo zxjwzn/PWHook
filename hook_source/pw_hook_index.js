@@ -1,8 +1,141 @@
 const server = require("./pw_hook_server.js");
 const store = require("./pw_hook_store.js");
-const interceptor = require("./pw_hook_interceptor.js");
 const electron = require("electron");
 const path = require("path");
+
+const API_BYPASS_SYMBOL = "__pw_hook_api_bypass__";
+
+const getWebContentsMeta = (wc) => {
+    let windowTitle = "";
+    let url = "";
+    try {
+        windowTitle = typeof wc.getTitle === "function" ? wc.getTitle() : "";
+    } catch (_) {}
+    try {
+        url = typeof wc.getURL === "function" ? wc.getURL() : "";
+    } catch (_) {}
+
+    return {
+        source: "webContents.send",
+        webContentsId: wc.id,
+        url,
+        windowTitle,
+    };
+};
+
+const logPayload = (prefix, payload) => {
+    try {
+        console.log(prefix, JSON.stringify(payload, null, 2));
+    } catch (_) {
+        console.log(prefix, payload);
+    }
+};
+
+const isApiBypassPayload = (payload) => {
+    return !!(payload && typeof payload === "object" && payload[API_BYPASS_SYMBOL] === true);
+};
+
+const sanitizeApiBypassPayload = (payload) => {
+    if (!isApiBypassPayload(payload)) {
+        return payload;
+    }
+    const nextPayload = { ...payload };
+    delete nextPayload[API_BYPASS_SYMBOL];
+    return nextPayload;
+};
+
+const emitHookEvent = ({ type, channel, direction, payload, rawArgs, meta, eventId }) => {
+    server.broadcastEventObject(store.createHookEvent({
+        type,
+        channel,
+        direction,
+        payload,
+        rawArgs,
+        meta,
+        eventId,
+    }));
+};
+
+const processExternalInterception = async ({ channel, direction, payload, rawArgs, meta }) => {
+    const shouldForward = store.shouldForwardChannel(direction, channel);
+    const shouldIntercept = store.shouldInterceptChannel(direction, channel);
+
+    if (!shouldForward && !shouldIntercept) {
+        return {
+            matched: false,
+            action: "allow",
+            payload,
+            rawArgs,
+        };
+    }
+
+    if (!shouldIntercept) {
+        emitHookEvent({
+            type: "notify",
+            channel,
+            direction,
+            payload,
+            rawArgs,
+            meta: {
+                ...meta,
+                interceptible: false,
+            },
+        });
+        return {
+            matched: true,
+            action: "allow",
+            payload,
+            rawArgs,
+        };
+    }
+
+    const pending = store.createPendingIntercept({
+        channel,
+        direction,
+        payload,
+        rawArgs,
+        meta,
+    });
+
+    emitHookEvent({
+        eventId: pending.eventId,
+        type: "intercept_request",
+        channel,
+        direction,
+        payload,
+        rawArgs,
+        meta: {
+            ...meta,
+            timeoutMs: pending.timeoutMs,
+            defaultAction: pending.defaultAction,
+            interceptible: true,
+        },
+    });
+
+    const decision = await pending.decisionPromise;
+
+    emitHookEvent({
+        eventId: pending.eventId,
+        type: "intercept_result",
+        channel,
+        direction,
+        payload: {
+            action: decision.action,
+            reason: decision.reason || "",
+        },
+        meta: {
+            ...meta,
+            resultSource: decision.resultSource,
+        },
+    });
+
+    return {
+        matched: true,
+        action: decision.action,
+        payload: decision.payload,
+        rawArgs,
+    };
+};
 
 const init = () => {
     // ─────────────────────────────────────────────────────────────
@@ -119,23 +252,45 @@ const init = () => {
 
         const wrappedListener = async function (event, ...args) {
             let modifiedArgs = args;
+            const shouldBypassInterception = isApiBypassPayload(modifiedArgs[0]);
 
-            // 拦截器修改请求参数
-            if (interceptor.upstream[channel]) {
+            if (shouldBypassInterception) {
+                modifiedArgs = Array.isArray(modifiedArgs) ? [...modifiedArgs] : [];
+                modifiedArgs[0] = sanitizeApiBypassPayload(modifiedArgs[0]);
+            }
+
+            console.log(`[PW_HOOK] 捕获前端请求 ↑ [${channel}]`);
+            if (modifiedArgs.length > 0) {
+                logPayload(`[PW_HOOK] 请求传参 Payload:`, modifiedArgs[0]);
+            }
+
+            if (!shouldBypassInterception) {
                 try {
-                    modifiedArgs = interceptor.upstream[channel](channel, event, args);
-                    console.log(`[PW_HOOK] 请求被拦截并修改 [${channel}]`);
+                    const interception = await processExternalInterception({
+                        channel,
+                        direction: "upstream",
+                        payload: modifiedArgs[0],
+                        rawArgs: modifiedArgs,
+                        meta: {
+                            source: "ipcMain.handle",
+                        },
+                    });
+
+                    if (interception.action === "block") {
+                        console.log(`[PW_HOOK] 外部程序阻断上行消息 [${channel}]`);
+                        return undefined;
+                    }
+
+                    if (interception.action === "modify") {
+                        modifiedArgs = Array.isArray(modifiedArgs) ? [...modifiedArgs] : [];
+                        modifiedArgs[0] = interception.payload;
+                        console.log(`[PW_HOOK] 外部程序修改上行消息 [${channel}]`);
+                    }
                 } catch (e) {
-                    console.error(`[PW_HOOK] 上行拦截器执行失败:`, e);
+                    console.error(`[PW_HOOK] 上行外部拦截执行失败:`, e);
                 }
             }
 
-            if (channel.startsWith("CSGO_") || channel.startsWith("CS2_") || channel.startsWith("MT_") || channel.startsWith("COMMON_")) {
-                console.log(`[PW_HOOK] 捕获前端请求 ↑ [${channel}]`);
-                if (modifiedArgs.length > 0) {
-                    console.log(`[PW_HOOK] 请求传参 Payload:`, JSON.stringify(modifiedArgs[0], null, 2));
-                }
-            }
             return await listener.apply(this, [event, ...modifiedArgs]);
         };
 
@@ -170,24 +325,50 @@ const init = () => {
         });
 
         const wrappedListener = function (event, ...args) {
+            return (async () => {
             let modifiedArgs = args;
+            const shouldBypassInterception = isApiBypassPayload(modifiedArgs[0]);
 
-            // 拦截器修改请求参数
-            if (interceptor.upstream[channel]) {
-                try {
-                    modifiedArgs = interceptor.upstream[channel](channel, event, args);
-                    console.log(`[PW_HOOK] 请求被拦截并修改 [${channel}]`);
-                } catch (e) {
-                    console.error(`[PW_HOOK] 上行拦截器执行失败:`, e);
-                }
+            if (shouldBypassInterception) {
+                modifiedArgs = Array.isArray(modifiedArgs) ? [...modifiedArgs] : [];
+                modifiedArgs[0] = sanitizeApiBypassPayload(modifiedArgs[0]);
             }
 
             // 当玩家在平台界面点击按钮触发 IPC 通信时，拦截并打印它的上行报文
             console.log(`[PW_HOOK] 捕获前端请求 ↑ [${channel}]`);
             if (modifiedArgs.length > 0) {
-                console.log(`[PW_HOOK] 请求传参 Payload:`, JSON.stringify(modifiedArgs[0], null, 2));
+                logPayload(`[PW_HOOK] 请求传参 Payload:`, modifiedArgs[0]);
             }
+
+            if (!shouldBypassInterception) {
+                try {
+                    const interception = await processExternalInterception({
+                        channel,
+                        direction: "upstream",
+                        payload: modifiedArgs[0],
+                        rawArgs: modifiedArgs,
+                        meta: {
+                            source: "ipcMain.on",
+                        },
+                    });
+
+                    if (interception.action === "block") {
+                        console.log(`[PW_HOOK] 外部程序阻断上行消息 [${channel}]`);
+                        return undefined;
+                    }
+
+                    if (interception.action === "modify") {
+                        modifiedArgs = Array.isArray(modifiedArgs) ? [...modifiedArgs] : [];
+                        modifiedArgs[0] = interception.payload;
+                        console.log(`[PW_HOOK] 外部程序修改上行消息 [${channel}]`);
+                    }
+                } catch (e) {
+                    console.error(`[PW_HOOK] 上行外部拦截执行失败:`, e);
+                }
+            }
+
             return listener.apply(this, [event, ...modifiedArgs]);
+            })();
         };
 
         const newArgs = [channel, wrappedListener];
@@ -202,42 +383,49 @@ const init = () => {
         wc.__pw_hook_injected__ = true;
 
         const originalSend = wc.send;
-        wc.send = function (channel, ...args) {
+        wc.send = async function (channel, ...args) {
             let targetChannel = channel;
             let modifiedArgs = args;
+            const shouldBypassInterception = isApiBypassPayload(modifiedArgs[0]);
 
-            // 拦截器修改响应参数
-            if (interceptor.downstream[channel]) {
-                try {
-                    const downstreamResult = interceptor.downstream[channel](channel, args);
-
-                    if (Array.isArray(downstreamResult)) {
-                        modifiedArgs = downstreamResult;
-                    } else if (downstreamResult && typeof downstreamResult === "object") {
-                        if (typeof downstreamResult.channel === "string" && downstreamResult.channel.length > 0) {
-                            targetChannel = downstreamResult.channel;
-                        }
-                        if (Array.isArray(downstreamResult.args)) {
-                            modifiedArgs = downstreamResult.args;
-                        }
-                    }
-                    console.log(`[PW_HOOK] 响应被拦截并修改 [${channel}]`);
-                } catch (e) {
-                    console.error(`[PW_HOOK] 下行拦截器执行失败:`, e);
-                }
+            if (shouldBypassInterception) {
+                modifiedArgs = Array.isArray(modifiedArgs) ? [...modifiedArgs] : [];
+                modifiedArgs[0] = sanitizeApiBypassPayload(modifiedArgs[0]);
             }
 
             console.log(`[PW_HOOK] 捕获服务端推送 ↓ [${targetChannel}]`);
             if (modifiedArgs.length > 0) {
-                console.log(`[PW_HOOK] 推送数据 Payload:`, JSON.stringify(modifiedArgs[0], null, 2));
+                logPayload(`[PW_HOOK] 推送数据 Payload:`, modifiedArgs[0]);
             }
 
             // 将服务端推给前端的事件通过 EventBus 广播出来，供 Router 等机制挂起等待
             try {
-                const store = require("./pw_hook_store.js");
                 store.getEventBus().emit(targetChannel, modifiedArgs[0]);
-                server.broadcastEvent(targetChannel, modifiedArgs[0]); // 推送到外部长连接
             } catch (err) { }
+
+            if (!shouldBypassInterception) {
+                try {
+                    const baseMeta = getWebContentsMeta(wc);
+                    const interception = await processExternalInterception({
+                        channel: targetChannel,
+                        direction: "downstream",
+                        payload: modifiedArgs[0],
+                        rawArgs: modifiedArgs,
+                        meta: baseMeta,
+                    });
+
+                    if (interception.action === "block") {
+                        console.log(`[PW_HOOK] 外部程序阻断消息 [${targetChannel}]`);
+                        return;
+                    }
+
+                    if (interception.action === "modify") {
+                        modifiedArgs = Array.isArray(modifiedArgs) ? [...modifiedArgs] : [];
+                        modifiedArgs[0] = interception.payload;
+                        console.log(`[PW_HOOK] 外部程序修改消息 [${targetChannel}]`);
+                    }
+                } catch (err) { }
+            }
 
             return originalSend.apply(this, [targetChannel, ...modifiedArgs]);
         };

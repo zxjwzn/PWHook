@@ -1,5 +1,41 @@
 const store = require("./pw_hook_store.js");
 
+const API_BYPASS_SYMBOL = "__pw_hook_api_bypass__";
+
+const createSuccessResponse = (data, status = 200) => {
+    return {
+        status,
+        data: {
+            ok: true,
+            timestamp: new Date().toISOString(),
+            data,
+            error: null,
+        },
+    };
+};
+
+const createErrorResponse = (message, status = 400, code = "BAD_REQUEST") => {
+    return {
+        status,
+        data: {
+            ok: false,
+            timestamp: new Date().toISOString(),
+            data: null,
+            error: {
+                code,
+                message,
+            },
+        },
+    };
+};
+
+const parseBody = (bodyPayload) => {
+    if (!bodyPayload) {
+        return {};
+    }
+    return JSON.parse(bodyPayload);
+};
+
 // 全局响应等待队列
 const waitQueues = {};
 
@@ -236,8 +272,8 @@ const ROUTE_MAPPING = {
         buildArgs: (params) => {
             return [
                 {
-                    chat_text: String(params.chat_text),
-                    chat_type: Number(params.chat_type),
+                    chat_text: String(params.text),
+                    chat_type: Number(params.type),
                 },
             ];
         },
@@ -387,7 +423,7 @@ const ROUTE_MAPPING = {
 
 // 处理 HTTP 请求并将参数透传给挂载的系统内部函数
 const handleRequest = async (req, res, bodyPayload) => {
-    // 约定 API 统一路径前缀: /api/call/函数名
+    // 约定 API 统一路径前缀: /api/call/已定义路由名
     const urlPath = req.url.split("?")[0];
     const routePrefix = "/api/call/";
 
@@ -408,34 +444,129 @@ const handleRequest = async (req, res, bodyPayload) => {
                 channel: route.channel,
                 params: paramsDesc,
                 waitFor: route.waitFor || null,
+                mode: route.waitFor ? "wait_event" : route.nowait ? "fire_and_forget" : "request_response",
+                timeoutMs: route.waitFor ? 2000 : null,
                 url: `/api/call/${key}`,
             };
         }
-        return {
-            status: 200,
-            data: docs,
-        };
+        return createSuccessResponse({
+            routes: docs,
+            subscriptions: {
+                schema: {
+                    upstream: {
+                        forwardChannels: ["CHANNEL_NAME"],
+                        interceptChannels: ["CHANNEL_NAME"],
+                    },
+                    downstream: {
+                        forwardChannels: ["CHANNEL_NAME"],
+                        interceptChannels: ["CHANNEL_NAME"],
+                    },
+                    timeoutMs: 1000,
+                    onTimeout: "allow",
+                },
+            },
+        });
     }
 
     if (urlPath === "/api/list") {
-        // 列出所有已注册的函数
-        const names = Object.keys(global.PW_HOOK_FUNCTIONS);
-        return {
-            status: 200,
-            data: {
-                functions: names,
-                mapped_routes: Object.keys(ROUTE_MAPPING),
-            },
-        };
+        return createSuccessResponse({
+                mappedRoutes: Object.keys(ROUTE_MAPPING),
+        });
+    }
+
+    if (urlPath === "/api/subscriptions" && req.method === "GET") {
+        return createSuccessResponse(store.getSubscriptions());
+    }
+
+    if (urlPath === "/api/subscriptions" && req.method === "POST") {
+        try {
+            const parsedBody = parseBody(bodyPayload);
+            const mode = parsedBody.mode === "patch" ? "patch" : "set";
+            const subscriptions = store.updateSubscriptions(parsedBody, mode);
+            return createSuccessResponse(subscriptions);
+        } catch (err) {
+            return createErrorResponse(err.message || String(err), 400, "INVALID_SUBSCRIPTIONS");
+        }
+    }
+
+    if (urlPath === "/api/subscriptions/clear" && req.method === "POST") {
+        const subscriptions = store.clearSubscriptions();
+        return createSuccessResponse(subscriptions);
+    }
+
+    if (urlPath === "/api/intercepts/respond" && req.method === "POST") {
+        try {
+            const parsedBody = parseBody(bodyPayload);
+            if (typeof parsedBody.eventId !== "string" || parsedBody.eventId.length === 0) {
+                return createErrorResponse("缺少 eventId", 400, "MISSING_EVENT_ID");
+            }
+            if (!["allow", "block", "modify"].includes(parsedBody.action)) {
+                return createErrorResponse("action 仅支持 allow/block/modify", 400, "INVALID_ACTION");
+            }
+
+            const resolved = store.resolvePendingIntercept({
+                eventId: parsedBody.eventId,
+                action: parsedBody.action,
+                payload: parsedBody.payload,
+                reason: parsedBody.reason,
+            });
+
+            if (!resolved) {
+                return createErrorResponse(`未找到待处理拦截事件: ${parsedBody.eventId}`, 404, "INTERCEPT_NOT_FOUND");
+            }
+
+            return createSuccessResponse({
+                resolved: true,
+                eventId: parsedBody.eventId,
+                action: parsedBody.action,
+            });
+        } catch (err) {
+            return createErrorResponse(err.message || String(err), 400, "INVALID_INTERCEPT_RESPONSE");
+        }
+    }
+
+    if (urlPath === "/api/notify/send" && req.method === "POST") {
+        try {
+            const parsedBody = parseBody(bodyPayload);
+            if (typeof parsedBody.channel !== "string" || parsedBody.channel.trim().length === 0) {
+                return createErrorResponse("缺少 channel", 400, "MISSING_CHANNEL");
+            }
+
+            const electron = require("electron");
+            const allWebContents = typeof electron.webContents?.getAllWebContents === "function"
+                ? electron.webContents.getAllWebContents()
+                : [];
+            const candidates = allWebContents.filter((wc) => {
+                try {
+                    return wc && !String(wc.getTitle?.() || "").includes("PW Hook Console");
+                } catch (_) {
+                    return !!wc;
+                }
+            });
+            const target = candidates[0] || allWebContents[0];
+
+            if (!target) {
+                return createErrorResponse("未找到可用的 webContents 目标", 404, "TARGET_NOT_FOUND");
+            }
+
+            if (parsedBody && typeof parsedBody.payload === "object" && parsedBody.payload !== null) {
+                parsedBody.payload[API_BYPASS_SYMBOL] = true;
+            }
+
+            target.send(parsedBody.channel.trim(), parsedBody.payload);
+            return createSuccessResponse({
+                sent: true,
+                channel: parsedBody.channel.trim(),
+                targetId: target.id,
+                bypassInterception: true,
+            });
+        } catch (err) {
+            return createErrorResponse(err.message || String(err), 500, "NOTIFY_SEND_FAILED");
+        }
     }
 
     if (!urlPath.startsWith(routePrefix)) {
-        return {
-            status: 404,
-            data: {
-                error: "未找到 Hook 路由，请访问 /api/call/<函数名> 或 /api/list",
-            },
-        };
+        return createErrorResponse("未找到 Hook 路由，请访问 /api/call/<route> 或 /api/list", 404, "ROUTE_NOT_FOUND");
     }
 
     const reqRouteMatch = urlPath.replace(routePrefix, "");
@@ -443,49 +574,39 @@ const handleRequest = async (req, res, bodyPayload) => {
     let args = [];
 
     try {
-        let parsedBody = {};
-        if (bodyPayload) {
-            parsedBody = JSON.parse(bodyPayload);
-        }
+        const parsedBody = parseBody(bodyPayload);
 
         let nowait = false;
         let waitFor = null;
 
-        // 检查是否有对应的路由映射
-        if (ROUTE_MAPPING[reqRouteMatch]) {
-            const mappedRoute = ROUTE_MAPPING[reqRouteMatch];
-            targetFuncName = mappedRoute.channel;
-
-            // 参数预处理：填充默认值
-            const finalParams = { ...parsedBody }; // 复制请求体作为基础
-            const routeParamsDef = mappedRoute.params || {};
-
-            for (const [paramKey, paramConfig] of Object.entries(routeParamsDef)) {
-                // 如果请求体中没有该参数（undefined或null），则使用默认值
-                if (finalParams[paramKey] === undefined || finalParams[paramKey] === null) {
-                    finalParams[paramKey] = paramConfig.default;
-                }
-            }
-
-            // 使用处理后的参数构建 IPC 参数数组
-            args = mappedRoute.buildArgs(finalParams);
-
-            nowait = !!mappedRoute.nowait;
-            waitFor = mappedRoute.waitFor;
-        } else {
-            // 未匹配映射时，兼容原始方式，直接读取 json 中的 args 数组
-            args = parsedBody.args || [];
+        const mappedRoute = ROUTE_MAPPING[reqRouteMatch];
+        if (!mappedRoute) {
+            return createErrorResponse(`未定义的 route: ${reqRouteMatch}`, 404, "ROUTE_NOT_DEFINED");
         }
+
+        targetFuncName = mappedRoute.channel;
+
+        // 参数预处理：填充默认值
+        const finalParams = { ...parsedBody };
+        const routeParamsDef = mappedRoute.params || {};
+
+        for (const [paramKey, paramConfig] of Object.entries(routeParamsDef)) {
+            if (finalParams[paramKey] === undefined || finalParams[paramKey] === null) {
+                finalParams[paramKey] = paramConfig.default;
+            }
+        }
+
+        args = mappedRoute.buildArgs(finalParams);
+        if (args.length > 0 && args[0] && typeof args[0] === "object") {
+            args[0][API_BYPASS_SYMBOL] = true;
+        }
+        nowait = !!mappedRoute.nowait;
+        waitFor = mappedRoute.waitFor;
 
         const targetFunc = store.getFunction(targetFuncName);
 
         if (!targetFunc) {
-            return {
-                status: 404,
-                data: {
-                    error: `函数/通道 '${targetFuncName}' 尚未被挂载到 Hook Store，请检查注入并确保平台注册了该通道。`,
-                },
-            };
+            return createErrorResponse(`函数/通道 '${targetFuncName}' 尚未被挂载到 Hook Store，请检查注入并确保平台注册了该通道。`, 404, "TARGET_NOT_REGISTERED");
         }
 
         let result;
@@ -539,14 +660,14 @@ const handleRequest = async (req, res, bodyPayload) => {
         }
 
         // 允许路由自定义响应解析规则 (parseResponse)
-        if (ROUTE_MAPPING[reqRouteMatch] && typeof ROUTE_MAPPING[reqRouteMatch].parseResponse === "function") {
-            finalPayload = ROUTE_MAPPING[reqRouteMatch].parseResponse(finalPayload);
+        if (typeof mappedRoute.parseResponse === "function") {
+            finalPayload = mappedRoute.parseResponse(finalPayload);
         }
 
-        return { status: 200, data: finalPayload };
+        return createSuccessResponse(finalPayload);
     } catch (err) {
         console.error(`[PW_HOOK] 调用通道 ${targetFuncName} 出现异常:`, err);
-        return { status: 500, data: { error: err.message || err.toString() } };
+        return createErrorResponse(err.message || err.toString(), 500, "CALL_FAILED");
     }
 };
 

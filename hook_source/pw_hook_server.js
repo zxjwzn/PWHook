@@ -1,11 +1,12 @@
 const http = require("http");
 const router = require("./pw_hook_router.js");
+const store = require("./pw_hook_store.js");
 
 const PORT = 28888; // HTTP服务器监听的端口
 
 // SSE 客户端列表
 const sseClients = [];
-const eventClients = [];
+let activeEventClient = null;
 
 /**
  * 向所有 SSE 客户端广播一条日志消息
@@ -39,19 +40,19 @@ const broadcastLog = (level, args) => {
  * @param {string} channel
  * @param {any} data
  */
-const broadcastEvent = (channel, data) => {
-    const payload = JSON.stringify({
-        channel,
-        time: new Date().toISOString(),
-        data: data
-    });
-    const message = `event: message\ndata: ${payload}\n\n`;
-    for (let i = eventClients.length - 1; i >= 0; i--) {
-        try {
-            eventClients[i].write(message);
-        } catch (_) {
-            eventClients.splice(i, 1);
-        }
+const writeEventMessage = (res, event) => {
+    const payload = JSON.stringify(event);
+    res.write(`event: message\ndata: ${payload}\n\n`);
+};
+
+const broadcastEventObject = (event) => {
+    if (!activeEventClient) {
+        return;
+    }
+    try {
+        writeEventMessage(activeEventClient, event);
+    } catch (_) {
+        activeEventClient = null;
     }
 };
 
@@ -78,7 +79,25 @@ const startServer = () => {
             });
             // 握手心跳
             res.write(": connected\n\n");
-            eventClients.push(res);
+            if (activeEventClient && activeEventClient !== res) {
+                try {
+                    activeEventClient.end();
+                } catch (_) {}
+            }
+            activeEventClient = res;
+
+            broadcastEventObject(store.createHookEvent({
+                type: "system",
+                channel: "_system",
+                direction: "internal",
+                payload: {
+                    message: "event stream connected",
+                    subscriptions: store.getSubscriptions(),
+                },
+                meta: {
+                    source: "pw_hook_server",
+                },
+            }));
 
             // 定时心跳防止连接超时
             const heartbeat = setInterval(() => {
@@ -91,8 +110,9 @@ const startServer = () => {
 
             req.on("close", () => {
                 clearInterval(heartbeat);
-                const idx = eventClients.indexOf(res);
-                if (idx !== -1) eventClients.splice(idx, 1);
+                if (activeEventClient === res) {
+                    activeEventClient = null;
+                }
             });
             return;
         }
@@ -158,4 +178,4 @@ const startServer = () => {
     });
 };
 
-module.exports = { startServer, broadcastLog, broadcastEvent };
+module.exports = { startServer, broadcastLog, broadcastEventObject };
