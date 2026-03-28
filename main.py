@@ -10,7 +10,7 @@ import os
 # 配置你的路径
 APP_EXE = r"D:\Applications\PerfectWorld\完美世界竞技平台.exe"
 HOOK_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "hook_source", "pw_hook_index.js")
-DEBUG_PORT = 9229
+DEBUG_PORT = 9230
 WAIT_FOR_INJECT = 0
 
 CREATE_FLAGS = (

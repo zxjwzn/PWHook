@@ -41,6 +41,44 @@ const waitQueues = {};
 
 // 将外部友好的 API 转换为内部的 IPC Channel 和数组参数
 const ROUTE_MAPPING = {
+    check_login_from_steam: {
+        description: "伪造触发 check-loginFromSteam 登录/登出事件",
+        channel: "check-loginFromSteam",
+        nowait: true,
+        params: {
+            type: {
+                desc: "事件类型，支持 logined / logout",
+                default: "logined",
+            },
+            token: {
+                desc: "登录 token；type=logout 时可为空",
+                default: "",
+            },
+            uid: {
+                desc: "用户 steamID；type=logout 时可为空",
+                default: "",
+            },
+            login_method: {
+                desc: "登录方式标记，原样透传给目标程序",
+                default: 0,
+            },
+        },
+        buildArgs: (params) => {
+            if (params.type === "logined") {
+                global.user.id = params.uid;//沟槽的完美把登录态放在了全局变量上
+                global.user.token = params.token;
+                global.user.login_method = params.login_method;
+            }
+            return [
+                {
+                    type: params.type,
+                    token: params.token,
+                    uid: params.uid,
+                    login_method: params.login_method,
+                },
+            ];
+        },
+    },
     search_friend: {
         description: "搜索好友",
         params: {
@@ -73,6 +111,25 @@ const ROUTE_MAPPING = {
             }
             return res;
         }
+    },
+    add_friend: {
+        description: "添加好友",
+        channel: "COMMON_IM_MT_APPLY_FRIEND_REQ",
+        params: {
+            uid: {
+                desc: "要添加的好友steamID",
+                default: "",
+            },
+        },
+        buildArgs: (params) => {
+            return [
+                {
+                    targetId: params.uid,
+                },
+            ];
+        },
+        waitFor: "COMMON_IM_MT_APPLY_FRIEND_RES",
+        //errCode为0添加成功,为10则重复添加
     },
     get_match_list: {
         description: "获取比赛列表",
