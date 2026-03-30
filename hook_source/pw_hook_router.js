@@ -41,8 +41,8 @@ const waitQueues = {};
 
 // 将外部友好的 API 转换为内部的 IPC Channel 和数组参数
 const ROUTE_MAPPING = {
-    check_login_from_steam: {
-        description: "伪造触发 check-loginFromSteam 登录/登出事件",
+    login: {
+        description: "触发 check-loginFromSteam 登录/登出事件",
         channel: "check-loginFromSteam",
         nowait: true,
         params: {
@@ -131,8 +131,8 @@ const ROUTE_MAPPING = {
         waitFor: "COMMON_IM_MT_APPLY_FRIEND_RES",
         //errCode为0添加成功,为10则重复添加
     },
-    get_match_list: {
-        description: "获取比赛列表",
+    get_user_match_history: {
+        description: "获取比赛历史记录",
         params: {
             uid: {
                 desc: "用户steamID",
@@ -183,7 +183,7 @@ const ROUTE_MAPPING = {
             ];
         },
     },
-    get_current_season: {
+    get_current_season_info: {
         description: "获取当前赛季",
         params: {},
         channel: "COMMON_GET_SEASON_DESC_REQ",
@@ -191,7 +191,7 @@ const ROUTE_MAPPING = {
             return [{}];
         },
     },
-    get_match_calendar: {
+    get_user_match_calendar: {
         description: "获取比赛日历/每日统计",
         params: {
             uid: {
@@ -218,7 +218,7 @@ const ROUTE_MAPPING = {
             ];
         },
     },
-    create_ladder_room: {
+    create_ladder_team: {
         description: "创建天梯房间",
         params: {
             map_names: {
@@ -261,7 +261,7 @@ const ROUTE_MAPPING = {
         },
         waitFor: "CSGO_LADDER_MT_CREATE_TEAM_RES",
     },
-    leave_ladder_room: {
+    leave_ladder_team: {
         description: "离开天梯房间/队伍",
         params: {
             leave_team_reason: {
@@ -292,7 +292,7 @@ const ROUTE_MAPPING = {
             return [envelope];
         },
     },
-    get_comment_list: {
+    get_user_comment_list: {
         description: "获取评论列表",
         params: {
             uid: {
@@ -313,7 +313,7 @@ const ROUTE_MAPPING = {
             return [envelope];
         },
     },
-    send_team_chat: {
+    send_team_msg: {
         description: "发送队伍聊天",
         params: {
             text: {
@@ -414,7 +414,7 @@ const ROUTE_MAPPING = {
             ];
         },
     },
-    get_season_stats: {
+    get_user_season_stats: {
         description: "获取赛季统计数据(雷达图/武器/地图)",
         channel: "CSGO_OVERVIEW_GET_SEASON_STATS_REQ",
         params: {
@@ -445,6 +445,13 @@ const ROUTE_MAPPING = {
             };
             return [envelope];
         },
+    },
+    get_current_user_info: {
+        description: "获取当前用户信息",
+        params: {},
+        handler: () => {
+            return global.user;
+        }
     },
     get_match_detail: {
         description: "获取赛后战绩详情",
@@ -639,6 +646,10 @@ const handleRequest = async (req, res, bodyPayload) => {
         const mappedRoute = ROUTE_MAPPING[reqRouteMatch];
         if (!mappedRoute) {
             return createErrorResponse(`未定义的 route: ${reqRouteMatch}`, 404, "ROUTE_NOT_DEFINED");
+        }
+
+        if (typeof mappedRoute.handler === "function") {
+            return createSuccessResponse(mappedRoute.handler());
         }
 
         targetFuncName = mappedRoute.channel;

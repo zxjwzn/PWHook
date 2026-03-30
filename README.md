@@ -151,7 +151,7 @@
   "data": {
     "mappedRoutes": [
       "search_friend",
-      "get_match_list"
+      "get_user_match_history"
     ]
   },
   "error": null
@@ -283,15 +283,15 @@
 
 ## 业务路由清单
 
-### `POST /api/call/check_login_from_steam`
+### `POST /api/call/login`
 - 通道：`check-loginFromSteam`
-- 说明：伪造触发 check-loginFromSteam 登录/登出事件
+- 说明：伪触发 check-loginFromSteam 登录/登出事件
 
 请求体：
 
 ```json
 {
-  "type": "logined",
+  "type": "logined", //或者logout,token和uid可在登录后获取到
   "token": "",
   "uid": "",
   "login_method": 0
@@ -330,7 +330,7 @@
 注:errCode为0添加成功,为10则重复添加
 ---
 
-### `POST /api/call/get_match_list`
+### `POST /api/call/get_user_match_history`
 - 通道：`CSGO_OVERVIEW_GET_MATCH_LIST_REQ`
 - 说明：获取比赛列表
 
@@ -351,7 +351,7 @@
 
 ---
 
-### `POST /api/call/get_current_season`
+### `POST /api/call/get_current_season_info`
 - 通道：`COMMON_GET_SEASON_DESC_REQ`
 - 说明：获取当前赛季
 
@@ -363,7 +363,7 @@
 
 ---
 
-### `POST /api/call/get_match_calendar`
+### `POST /api/call/get_user_match_calendar`
 - 通道：`CSGO_OVERVIEW_GET_DAILY_STATS_REQ`
 - 说明：获取比赛日历/每日统计
 
@@ -379,7 +379,7 @@
 
 ---
 
-### `POST /api/call/create_ladder_room`
+### `POST /api/call/create_ladder_team`
 - 通道：`CSGO_LADDER_MT_CREATE_TEAM_REQ`
 - 说明：创建天梯房间
 - 返回模式：等待 `CSGO_LADDER_MT_CREATE_TEAM_RES`
@@ -399,7 +399,7 @@
 
 ---
 
-### `POST /api/call/leave_ladder_room`
+### `POST /api/call/leave_ladder_team`
 - 通道：`CSGO_LADDER_MT_LEAVE_TEAM_REQ`
 - 说明：离开天梯房间/队伍
 - 返回模式：等待 `CSGO_LADDER_MT_LEAVE_TEAM_NOTIFY`
@@ -428,7 +428,7 @@
 
 ---
 
-### `POST /api/call/get_comment_list`
+### `POST /api/call/get_user_comment_list`
 - 通道：`CSGO_OVERVIEW_COMMENT_GET_COMMENT_LIST_REQ`
 - 说明：获取评论列表
 
@@ -442,7 +442,7 @@
 
 ---
 
-### `POST /api/call/send_team_chat`
+### `POST /api/call/send_team_msg`
 - 通道：`CSGO_LADDER_MT_TEAM_CHAT_REQ`
 - 说明：发送队伍聊天
 - 返回模式：等待 `CSGO_LADDER_MT_TEAM_CHAT_RES`
@@ -507,7 +507,7 @@
 
 ---
 
-### `POST /api/call/get_season_stats`
+### `POST /api/call/get_user_season_stats`
 - 通道：`CSGO_OVERVIEW_GET_SEASON_STATS_REQ`
 - 说明：获取赛季统计数据
 
@@ -535,6 +535,17 @@
 }
 ```
 
+---
+
+### `POST /api/call/get_current_user_info`
+- 通道：无（内部直接返回内存状态）
+- 说明：获取当前登录用户信息
+
+请求体：
+
+```json
+{}
+```
 ---
 
 ## SSE 使用说明
