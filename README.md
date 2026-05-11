@@ -1,5 +1,10 @@
 # PWHook API 文档
 
+
+4月2日完美更新后，需要添加环境变量才能正常注入
+[Environment]::SetEnvironmentVariable("VUE_APP_ELECTRON_PVP_ENV", "development", "User")
+
+
 ## 概述
 
 `PWHook` 提供一套本地 HTTP + SSE 接口，用于：
